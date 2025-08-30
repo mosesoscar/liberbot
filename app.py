@@ -25,12 +25,59 @@ class CoinGeckoTradingBot:
         """Get list of available coins"""
         try:
             response = requests.get(f"{self.base_url}/coins/markets", 
-                                  params={'vs_currency': 'usd', 'order': 'market_cap_desc', 'per_page': 100})
+                                  params={'vs_currency': 'usd', 'order': 'market_cap_desc', 'per_page': 250})
             coins = response.json()
             return {coin['name']: coin['id'] for coin in coins}
         except Exception as e:
             st.error(f"Error fetching coin list: {e}")
             return {}
+    
+    def search_coin(self, search_term: str) -> dict:
+        """Search for a specific coin by name or symbol"""
+        try:
+            # First try to search using the coins/list endpoint for exact matches
+            response = requests.get(f"{self.base_url}/coins/list")
+            all_coins = response.json()
+            
+            search_term = search_term.lower().strip()
+            matches = []
+            
+            # Look for exact matches first
+            for coin in all_coins:
+                if (coin['name'].lower() == search_term or 
+                    coin['symbol'].lower() == search_term or 
+                    coin['id'].lower() == search_term):
+                    matches.append(coin)
+            
+            # If no exact matches, look for partial matches
+            if not matches:
+                for coin in all_coins:
+                    if (search_term in coin['name'].lower() or 
+                        search_term in coin['symbol'].lower() or 
+                        search_term in coin['id'].lower()):
+                        matches.append(coin)
+                        if len(matches) >= 10:  # Limit to top 10 matches
+                            break
+            
+            return {'found': len(matches) > 0, 'matches': matches[:10]}
+            
+        except Exception as e:
+            st.error(f"Error searching for coin: {e}")
+            return {'found': False, 'matches': []}
+    
+    def validate_coin(self, coin_id: str) -> bool:
+        """Validate if a coin exists and has market data"""
+        try:
+            response = requests.get(f"{self.base_url}/coins/{coin_id}")
+            if response.status_code == 200:
+                data = response.json()
+                # Check if coin has market data
+                market_data = data.get('market_data', {})
+                current_price = market_data.get('current_price', {}).get('usd', 0)
+                return current_price > 0
+            return False
+        except:
+            return False
     
     @st.cache_data(ttl=300)
     def get_price_data(_self, coin_id: str, days: int = 30) -> pd.DataFrame:
@@ -401,8 +448,18 @@ def main():
     # Sidebar controls
     st.sidebar.header("🔧 Analysis Controls")
     
-    # Get popular coins
-    with st.spinner("Loading available coins..."):
+    # Coin selection method
+    selection_method = st.sidebar.radio(
+        "🎯 How would you like to select a coin?",
+        ["Popular Coins", "Search Any Coin"],
+        help="Choose from popular coins or search for any coin available on CoinGecko"
+    )
+    
+    coin_id = None
+    selected_coin_name = None
+    
+    if selection_method == "Popular Coins":
+        # Predefined popular coins
         coin_options = {
             'Bitcoin': 'bitcoin',
             'Ethereum': 'ethereum', 
@@ -415,15 +472,61 @@ def main():
             'Avalanche': 'avalanche-2',
             'Chainlink': 'chainlink'
         }
-    
-    # Coin selection
-    selected_coin_name = st.sidebar.selectbox(
-        "📊 Select Cryptocurrency",
-        list(coin_options.keys()),
-        index=0
-    )
-    
-    coin_id = coin_options[selected_coin_name]
+        
+        selected_coin_name = st.sidebar.selectbox(
+            "📊 Select Popular Cryptocurrency",
+            list(coin_options.keys()),
+            index=0
+        )
+        coin_id = coin_options[selected_coin_name]
+        
+    else:  # Search Any Coin
+        st.sidebar.markdown("### 🔍 Search for Any Coin")
+        search_term = st.sidebar.text_input(
+            "Enter coin name or symbol",
+            placeholder="e.g., Polygon, MATIC, Avalanche",
+            help="Search by coin name, symbol, or CoinGecko ID"
+        )
+        
+        if search_term:
+            with st.sidebar:
+                with st.spinner("🔍 Searching for coin..."):
+                    search_results = bot.search_coin(search_term)
+                
+                if search_results['found']:
+                    matches = search_results['matches']
+                    
+                    if len(matches) == 1:
+                        # Only one match found
+                        coin = matches[0]
+                        coin_id = coin['id']
+                        selected_coin_name = coin['name']
+                        st.sidebar.success(f"✅ Found: {coin['name']} ({coin['symbol'].upper()})")
+                        
+                    else:
+                        # Multiple matches - let user choose
+                        st.sidebar.write("🎯 Multiple matches found:")
+                        
+                        coin_display_options = []
+                        coin_id_mapping = {}
+                        
+                        for coin in matches:
+                            display_name = f"{coin['name']} ({coin['symbol'].upper()})"
+                            coin_display_options.append(display_name)
+                            coin_id_mapping[display_name] = coin['id']
+                        
+                        selected_display = st.sidebar.selectbox(
+                            "Select the correct coin:",
+                            coin_display_options
+                        )
+                        
+                        if selected_display:
+                            coin_id = coin_id_mapping[selected_display]
+                            selected_coin_name = selected_display.split(' (')[0]
+                            
+                else:
+                    st.sidebar.error(f"❌ No coin found matching '{search_term}'")
+                    st.sidebar.info("💡 Try searching by:\n- Full name (e.g., 'Polygon')\n- Symbol (e.g., 'MATIC')\n- Partial name (e.g., 'poly')")
     
     # Analysis period
     analysis_days = st.sidebar.selectbox(
@@ -442,22 +545,33 @@ def main():
         time.sleep(60)
         st.rerun()
     
+    # Validation and analysis
+    if not coin_id:
+        if selection_method == "Search Any Coin":
+            st.info("🔍 Enter a coin name or symbol in the sidebar to search")
+        return
+    
     # Main analysis
-    if analyze_button or 'current_analysis' not in st.session_state:
+    if analyze_button or 'current_analysis' not in st.session_state or st.session_state.get('current_coin_id') != coin_id:
         with st.spinner(f'🔍 Analyzing {selected_coin_name}...'):
             try:
+                # Validate coin exists and has data
+                if not bot.validate_coin(coin_id):
+                    st.error(f"❌ Coin '{selected_coin_name}' not found or has no market data on CoinGecko. Please try a different coin.")
+                    return
+                
                 # Get current price info
                 price_info = bot.get_current_price_info(coin_id)
                 
-                if not price_info:
-                    st.error("❌ Failed to fetch coin data. Please try again.")
+                if not price_info or price_info.get('current_price', 0) == 0:
+                    st.error(f"❌ Failed to fetch data for '{selected_coin_name}'. This coin may not have USD market data.")
                     return
                 
                 # Get historical data
                 df = bot.get_price_data(coin_id, days=analysis_days)
                 
                 if df.empty:
-                    st.error("❌ No historical data available for this coin.")
+                    st.error(f"❌ No historical data available for '{selected_coin_name}' for the selected period.")
                     return
                 
                 # Calculate indicators
@@ -466,14 +580,20 @@ def main():
                 # Analyze signals
                 analysis = bot.analyze_signals(df)
                 
+                if 'error' in analysis:
+                    st.error(f"❌ {analysis['error']}")
+                    return
+                
                 # Store in session
                 st.session_state.current_analysis = {
                     'price_info': price_info,
                     'df': df,
                     'analysis': analysis,
-                    'coin_name': selected_coin_name,
+                    'coin_name': price_info.get('name', selected_coin_name),
+                    'coin_symbol': price_info.get('symbol', ''),
                     'last_update': datetime.now()
                 }
+                st.session_state.current_coin_id = coin_id
                 
             except Exception as e:
                 st.error(f"❌ Analysis failed: {str(e)}")
@@ -489,9 +609,10 @@ def main():
     df = data['df']
     analysis = data['analysis']
     coin_name = data['coin_name']
+    coin_symbol = data['coin_symbol']
     
     # Success message
-    st.success(f"✅ Analysis complete for {coin_name}")
+    st.success(f"✅ Analysis complete for {coin_name} ({coin_symbol})")
     st.caption(f"Last updated: {data['last_update'].strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Quick metrics row
@@ -530,7 +651,7 @@ def main():
     # Technical Analysis Chart
     st.header("📊 Technical Analysis Chart")
     
-    fig = bot.create_price_chart(df, coin_name)
+    fig = bot.create_price_chart(df, f"{coin_name} ({coin_symbol})")
     st.plotly_chart(fig, use_container_width=True)
     
     # Detailed Analysis
@@ -651,12 +772,20 @@ with st.sidebar:
     st.markdown("### 🎯 Features")
     st.markdown("""
     - ✅ Real-time price data
+    - ✅ Search any CoinGecko coin
     - ✅ Multi-indicator analysis  
     - ✅ Pattern recognition
     - ✅ Interactive charts
     - ✅ Clear buy/sell signals
     - ✅ No geo-restrictions
     """)
+    
+    if 'current_analysis' in st.session_state:
+        st.markdown("### 🪙 Current Analysis")
+        data = st.session_state.current_analysis
+        st.markdown(f"**Coin:** {data['coin_name']}")
+        st.markdown(f"**Symbol:** {data['coin_symbol']}")
+        st.markdown(f"**Last Update:** {data['last_update'].strftime('%H:%M:%S')}")
 
 if __name__ == "__main__":
     main()
