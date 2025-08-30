@@ -1,19 +1,14 @@
-# :earth_americas: GDP dashboard template
+# Crypto Trading Analysis Bot
 
-A simple Streamlit app showing the GDP of different countries in the world.
+Advanced cryptocurrency market analysis with multi-timeframe signals, pattern recognition, and interactive charts.
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://gdp-dashboard-template.streamlit.app/)
+## Features
+- Multi-timeframe analysis (1h, 4h, 1d)
+- Technical indicators (RSI, MACD, Bollinger Bands)
+- Chart pattern detection
+- Market regime identification
+- Interactive dashboard
 
-### How to run it on your own machine
-
-1. Install the requirements
-
-   ```
-   $ pip install -r requirements.txt
-   ```
-
-2. Run the app
-
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+## Usage
+```bash
+streamlit run app.py
