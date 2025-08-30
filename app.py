@@ -32,6 +32,21 @@ class CoinGeckoTradingBot:
             st.error(f"Error fetching coin list: {e}")
             return {}
     
+    @st.cache_data(ttl=60)  # Cache for 1 minute
+    def search_coin(_self, search_term: str) -> list:
+        """Search for coins by name or symbol - cached for efficiency"""
+        try:
+            # Use the search endpoint which is more efficient
+            response = requests.get(f"{_self.base_url}/search", 
+                                  params={'query': search_term})
+            if response.status_code == 200:
+                data = response.json()
+                coins = data.get('coins', [])
+                return coins[:15]  # Return top 15 matches
+            return []
+        except Exception as e:
+            return []
+    
     @st.cache_data(ttl=300)
     def get_price_data(_self, coin_id: str, days: int = 30) -> pd.DataFrame:
         """Fetch OHLC data from CoinGecko"""
@@ -401,8 +416,17 @@ def main():
     # Sidebar controls
     st.sidebar.header("🔧 Analysis Controls")
     
-    # Get popular coins
-    with st.spinner("Loading available coins..."):
+    # Coin selection method
+    selection_method = st.sidebar.radio(
+        "🎯 Select Coin Method",
+        ["Popular Coins", "Search Any Coin"]
+    )
+    
+    coin_id = None
+    selected_coin_name = None
+    
+    if selection_method == "Popular Coins":
+        # Predefined popular coins
         coin_options = {
             'Bitcoin': 'bitcoin',
             'Ethereum': 'ethereum', 
@@ -415,15 +439,74 @@ def main():
             'Avalanche': 'avalanche-2',
             'Chainlink': 'chainlink'
         }
-    
-    # Coin selection
-    selected_coin_name = st.sidebar.selectbox(
-        "📊 Select Cryptocurrency",
-        list(coin_options.keys()),
-        index=0
-    )
-    
-    coin_id = coin_options[selected_coin_name]
+        
+        selected_coin_name = st.sidebar.selectbox(
+            "📊 Select Popular Cryptocurrency",
+            list(coin_options.keys()),
+            index=0
+        )
+        coin_id = coin_options[selected_coin_name]
+        
+    else:  # Search Any Coin
+        st.sidebar.markdown("### 🔍 Search for Any Coin")
+        
+        # Initialize search state
+        if 'search_results' not in st.session_state:
+            st.session_state.search_results = []
+        if 'selected_search_coin' not in st.session_state:
+            st.session_state.selected_search_coin = None
+        
+        # Search input
+        search_term = st.sidebar.text_input(
+            "Enter coin name or symbol",
+            placeholder="e.g., Polygon, MATIC, SHIB",
+            key="coin_search_input"
+        )
+        
+        # Search button
+        search_button = st.sidebar.button("🔍 Search Coins")
+        
+        if search_button and search_term:
+            with st.sidebar:
+                with st.spinner("Searching..."):
+                    results = bot.search_coin(search_term)
+                    st.session_state.search_results = results
+                    st.session_state.selected_search_coin = None
+        
+        # Display search results
+        if st.session_state.search_results:
+            st.sidebar.write(f"🎯 Found {len(st.session_state.search_results)} matches:")
+            
+            # Create options for selectbox
+            coin_options = {}
+            for coin in st.session_state.search_results:
+                display_name = f"{coin['name']} ({coin['symbol'].upper()})"
+                coin_options[display_name] = coin['id']
+            
+            if coin_options:
+                selected_display = st.sidebar.selectbox(
+                    "Select coin to analyze:",
+                    [""] + list(coin_options.keys()),
+                    key="search_coin_selector"
+                )
+                
+                if selected_display and selected_display != "":
+                    coin_id = coin_options[selected_display]
+                    selected_coin_name = selected_display.split(' (')[0]
+                    st.session_state.selected_search_coin = {
+                        'id': coin_id,
+                        'name': selected_coin_name,
+                        'display': selected_display
+                    }
+        
+        elif search_term and search_button:
+            st.sidebar.error(f"❌ No coins found for '{search_term}'")
+            st.sidebar.info("💡 Try:\n- Full name (Bitcoin)\n- Symbol (BTC)\n- Partial match (bit)")
+        
+        # Use previously selected search coin if available
+        if st.session_state.selected_search_coin and not coin_id:
+            coin_id = st.session_state.selected_search_coin['id']
+            selected_coin_name = st.session_state.selected_search_coin['name']
     
     # Analysis period
     analysis_days = st.sidebar.selectbox(
@@ -432,8 +515,15 @@ def main():
         index=2
     )
     
-    # Analysis button
-    analyze_button = st.sidebar.button("🚀 Analyze Now", type="primary")
+    # Analysis button - only show if coin is selected
+    if coin_id:
+        analyze_button = st.sidebar.button("🚀 Analyze Now", type="primary")
+    else:
+        analyze_button = False
+        if selection_method == "Popular Coins":
+            st.sidebar.info("Select a coin above to analyze")
+        else:
+            st.sidebar.info("Search and select a coin to analyze")
     
     # Auto-refresh
     auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (60s)")
@@ -443,21 +533,21 @@ def main():
         st.rerun()
     
     # Main analysis
-    if analyze_button or 'current_analysis' not in st.session_state:
+    if analyze_button and coin_id:
         with st.spinner(f'🔍 Analyzing {selected_coin_name}...'):
             try:
                 # Get current price info
                 price_info = bot.get_current_price_info(coin_id)
                 
-                if not price_info:
-                    st.error("❌ Failed to fetch coin data. Please try again.")
+                if not price_info or price_info.get('current_price', 0) == 0:
+                    st.error(f"❌ Failed to fetch data for '{selected_coin_name}'. Please try again or select a different coin.")
                     return
                 
                 # Get historical data
                 df = bot.get_price_data(coin_id, days=analysis_days)
                 
                 if df.empty:
-                    st.error("❌ No historical data available for this coin.")
+                    st.error(f"❌ No historical data available for '{selected_coin_name}' for the selected period.")
                     return
                 
                 # Calculate indicators
@@ -466,12 +556,18 @@ def main():
                 # Analyze signals
                 analysis = bot.analyze_signals(df)
                 
+                if 'error' in analysis:
+                    st.error(f"❌ {analysis['error']}")
+                    return
+                
                 # Store in session
                 st.session_state.current_analysis = {
                     'price_info': price_info,
                     'df': df,
                     'analysis': analysis,
-                    'coin_name': selected_coin_name,
+                    'coin_name': price_info.get('name', selected_coin_name),
+                    'coin_symbol': price_info.get('symbol', ''),
+                    'coin_id': coin_id,
                     'last_update': datetime.now()
                 }
                 
@@ -489,9 +585,10 @@ def main():
     df = data['df']
     analysis = data['analysis']
     coin_name = data['coin_name']
+    coin_symbol = data['coin_symbol']
     
     # Success message
-    st.success(f"✅ Analysis complete for {coin_name}")
+    st.success(f"✅ Analysis complete for {coin_name} ({coin_symbol})")
     st.caption(f"Last updated: {data['last_update'].strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Quick metrics row
@@ -530,7 +627,7 @@ def main():
     # Technical Analysis Chart
     st.header("📊 Technical Analysis Chart")
     
-    fig = bot.create_price_chart(df, coin_name)
+    fig = bot.create_price_chart(df, f"{coin_name} ({coin_symbol})")
     st.plotly_chart(fig, use_container_width=True)
     
     # Detailed Analysis
@@ -651,12 +748,20 @@ with st.sidebar:
     st.markdown("### 🎯 Features")
     st.markdown("""
     - ✅ Real-time price data
+    - ✅ Search any CoinGecko coin
     - ✅ Multi-indicator analysis  
     - ✅ Pattern recognition
     - ✅ Interactive charts
     - ✅ Clear buy/sell signals
     - ✅ No geo-restrictions
     """)
+    
+    if 'current_analysis' in st.session_state:
+        st.markdown("### 🪙 Current Analysis")
+        data = st.session_state.current_analysis
+        st.markdown(f"**Coin:** {data['coin_name']}")
+        st.markdown(f"**Symbol:** {data['coin_symbol']}")
+        st.markdown(f"**Last Update:** {data['last_update'].strftime('%H:%M:%S')}")
 
 if __name__ == "__main__":
     main()
