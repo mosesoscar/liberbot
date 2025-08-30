@@ -1,12 +1,12 @@
 import streamlit as st
-import ccxt
 import pandas as pd
 import numpy as np
-import ta
+import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import time
+import json
 
 # Page configuration
 st.set_page_config(
@@ -16,49 +16,90 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-class StreamlitTradingBot:
-    def __init__(self, exchange_name: str = 'binance'):
-        """Initialize the trading analysis bot for Streamlit"""
-        self.exchange = getattr(ccxt, exchange_name)({
-            'sandbox': False,
-            'rateLimit': 1200,
-            'enableRateLimit': True,
-        })
+class CoinGeckoTradingBot:
+    def __init__(self):
+        """Initialize the trading analysis bot using CoinGecko API"""
+        self.base_url = "https://api.coingecko.com/api/v3"
+        
+    def get_coin_list(self):
+        """Get list of available coins"""
+        try:
+            response = requests.get(f"{self.base_url}/coins/markets", 
+                                  params={'vs_currency': 'usd', 'order': 'market_cap_desc', 'per_page': 100})
+            coins = response.json()
+            return {coin['name']: coin['id'] for coin in coins}
+        except Exception as e:
+            st.error(f"Error fetching coin list: {e}")
+            return {}
     
-    @st.cache_data(ttl=300)  # Cache for 5 minutes
-    def get_multi_timeframe_data(_self, symbol: str) -> dict:
-        """Fetch data across multiple timeframes with caching"""
-        timeframes = {
-            '1h': 168,   # 1 week of hourly data
-            '4h': 168,   # 4 weeks of 4h data  
-            '1d': 100    # 100 days of daily data
-        }
-        
-        data = {}
-        progress_bar = st.progress(0)
-        
-        for i, (tf, limit) in enumerate(timeframes.items()):
-            try:
-                with st.spinner(f'Fetching {tf} data...'):
-                    ohlcv = _self.exchange.fetch_ohlcv(symbol, tf, limit=limit)
-                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                    df.set_index('timestamp', inplace=True)
-                    df = _self.calculate_technical_indicators(df)
-                    data[tf] = df
-                progress_bar.progress((i + 1) / len(timeframes))
-            except Exception as e:
-                st.error(f"Error fetching {tf} data: {e}")
+    @st.cache_data(ttl=300)
+    def get_price_data(_self, coin_id: str, days: int = 30) -> pd.DataFrame:
+        """Fetch OHLC data from CoinGecko"""
+        try:
+            # Get OHLC data
+            response = requests.get(f"{_self.base_url}/coins/{coin_id}/ohlc", 
+                                  params={'vs_currency': 'usd', 'days': days})
+            data = response.json()
+            
+            if not data:
+                return pd.DataFrame()
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            # Get volume data separately
+            volume_response = requests.get(f"{_self.base_url}/coins/{coin_id}/market_chart", 
+                                        params={'vs_currency': 'usd', 'days': days})
+            volume_data = volume_response.json()
+            
+            if 'total_volumes' in volume_data:
+                volume_df = pd.DataFrame(volume_data['total_volumes'], columns=['timestamp', 'volume'])
+                volume_df['timestamp'] = pd.to_datetime(volume_df['timestamp'], unit='ms')
+                volume_df.set_index('timestamp', inplace=True)
                 
-        progress_bar.empty()
-        return data
+                # Merge volume data
+                df = df.merge(volume_df, left_index=True, right_index=True, how='left')
+            else:
+                df['volume'] = 0
+            
+            return df
+            
+        except Exception as e:
+            st.error(f"Error fetching price data: {e}")
+            return pd.DataFrame()
+    
+    def get_current_price_info(self, coin_id: str) -> dict:
+        """Get current price and market data"""
+        try:
+            response = requests.get(f"{self.base_url}/coins/{coin_id}")
+            data = response.json()
+            
+            market_data = data.get('market_data', {})
+            
+            return {
+                'current_price': market_data.get('current_price', {}).get('usd', 0),
+                'price_change_24h': market_data.get('price_change_percentage_24h', 0),
+                'market_cap': market_data.get('market_cap', {}).get('usd', 0),
+                'volume_24h': market_data.get('total_volume', {}).get('usd', 0),
+                'high_24h': market_data.get('high_24h', {}).get('usd', 0),
+                'low_24h': market_data.get('low_24h', {}).get('usd', 0),
+                'market_cap_rank': data.get('market_cap_rank', 0),
+                'name': data.get('name', ''),
+                'symbol': data.get('symbol', '').upper()
+            }
+        except Exception as e:
+            st.error(f"Error fetching current price: {e}")
+            return {}
     
     def calculate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate comprehensive technical indicators"""
+        """Calculate technical indicators"""
         if len(df) < 20:
             return df
             
         # Moving Averages
+        df['sma_7'] = df['close'].rolling(7).mean()
         df['sma_20'] = df['close'].rolling(20).mean()
         df['sma_50'] = df['close'].rolling(50).mean() if len(df) >= 50 else df['close'].rolling(len(df)//2).mean()
         df['ema_12'] = df['close'].ewm(span=12).mean()
@@ -81,6 +122,7 @@ class StreamlitTradingBot:
         bb_std = df['close'].rolling(20).std()
         df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
         df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+        df['bb_width'] = ((df['bb_upper'] - df['bb_lower']) / df['bb_middle']) * 100
         
         # Stochastic
         low_14 = df['low'].rolling(14).min()
@@ -88,9 +130,16 @@ class StreamlitTradingBot:
         df['stoch_k'] = 100 * (df['close'] - low_14) / (high_14 - low_14)
         df['stoch_d'] = df['stoch_k'].rolling(3).mean()
         
-        # Volume
-        df['volume_sma'] = df['volume'].rolling(20).mean()
-        df['volume_ratio'] = df['volume'] / df['volume_sma']
+        # Volume indicators
+        if 'volume' in df.columns and df['volume'].sum() > 0:
+            df['volume_sma'] = df['volume'].rolling(20).mean()
+            df['volume_ratio'] = df['volume'] / df['volume_sma']
+        else:
+            df['volume_sma'] = 0
+            df['volume_ratio'] = 1
+        
+        # Volatility
+        df['volatility'] = df['close'].rolling(20).std() / df['close'].rolling(20).mean() * 100
         
         return df
     
@@ -100,127 +149,188 @@ class StreamlitTradingBot:
         
         if len(df) < 20:
             return patterns
-            
-        # Simple pattern detection
-        recent_highs = df['high'].tail(10).values
-        recent_lows = df['low'].tail(10).values
         
-        # Double Top (simplified)
+        # Recent price action
+        recent = df.tail(20)
+        
+        # Double Top Pattern
+        highs = recent['high'].values
         peaks = []
-        for i in range(2, len(recent_highs) - 2):
-            if recent_highs[i] > recent_highs[i-1] and recent_highs[i] > recent_highs[i+1]:
-                peaks.append(recent_highs[i])
+        for i in range(2, len(highs) - 2):
+            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+                peaks.append((i, highs[i]))
         
-        if len(peaks) >= 2 and abs(peaks[-1] - peaks[-2]) / peaks[-1] < 0.02:
+        if len(peaks) >= 2:
+            last_two_peaks = peaks[-2:]
+            if abs(last_two_peaks[0][1] - last_two_peaks[1][1]) / last_two_peaks[0][1] < 0.03:
+                patterns.append({
+                    'type': 'Double Top',
+                    'signal': 'Bearish',
+                    'strength': 'Medium',
+                    'description': 'Two similar highs detected - potential reversal'
+                })
+        
+        # Breakout Detection
+        recent_high = recent['high'].max()
+        recent_low = recent['low'].min()
+        current_price = df['close'].iloc[-1]
+        
+        if current_price > recent_high * 0.99:
             patterns.append({
-                'type': 'Double Top',
-                'signal': 'Bearish',
-                'strength': 'Medium'
+                'type': 'Breakout Above Resistance',
+                'signal': 'Bullish',
+                'strength': 'Strong',
+                'description': 'Price breaking above recent resistance'
+            })
+        elif current_price < recent_low * 1.01:
+            patterns.append({
+                'type': 'Breakdown Below Support',
+                'signal': 'Bearish', 
+                'strength': 'Strong',
+                'description': 'Price breaking below recent support'
             })
         
         return patterns
     
-    def analyze_timeframe(self, df: pd.DataFrame, timeframe: str) -> dict:
-        """Analyze individual timeframe"""
-        if len(df) < 10:
-            return {'error': f'Insufficient data for {timeframe}'}
+    def analyze_signals(self, df: pd.DataFrame) -> dict:
+        """Comprehensive signal analysis"""
+        if len(df) < 20:
+            return {'error': 'Insufficient data'}
             
         latest = df.iloc[-1]
-        
         signals = []
-        strength = 0
+        score = 0
         
         # RSI Analysis
         rsi = latest['rsi']
         if not pd.isna(rsi):
             if rsi < 30:
-                signals.append(f'🟢 RSI Oversold ({rsi:.1f})')
-                strength += 1
+                signals.append({'indicator': 'RSI', 'signal': 'OVERSOLD', 'strength': 'Strong', 'bullish': True})
+                score += 2
+            elif rsi < 40:
+                signals.append({'indicator': 'RSI', 'signal': 'Weak', 'strength': 'Medium', 'bullish': True})
+                score += 1
             elif rsi > 70:
-                signals.append(f'🔴 RSI Overbought ({rsi:.1f})')
-                strength -= 1
+                signals.append({'indicator': 'RSI', 'signal': 'OVERBOUGHT', 'strength': 'Strong', 'bullish': False})
+                score -= 2
+            elif rsi > 60:
+                signals.append({'indicator': 'RSI', 'signal': 'Strong', 'strength': 'Medium', 'bullish': False})
+                score -= 1
             else:
-                signals.append(f'🟡 RSI Neutral ({rsi:.1f})')
+                signals.append({'indicator': 'RSI', 'signal': 'Neutral', 'strength': 'Weak', 'bullish': None})
         
         # MACD Analysis
         if not pd.isna(latest['macd']) and not pd.isna(latest['macd_signal']):
             if latest['macd'] > latest['macd_signal']:
-                signals.append('🟢 MACD Bullish')
-                strength += 1
+                if latest['macd_histogram'] > 0:
+                    signals.append({'indicator': 'MACD', 'signal': 'Bullish Momentum', 'strength': 'Strong', 'bullish': True})
+                    score += 2
+                else:
+                    signals.append({'indicator': 'MACD', 'signal': 'Bullish', 'strength': 'Medium', 'bullish': True})
+                    score += 1
             else:
-                signals.append('🔴 MACD Bearish')
-                strength -= 1
+                if latest['macd_histogram'] < 0:
+                    signals.append({'indicator': 'MACD', 'signal': 'Bearish Momentum', 'strength': 'Strong', 'bullish': False})
+                    score -= 2
+                else:
+                    signals.append({'indicator': 'MACD', 'signal': 'Bearish', 'strength': 'Medium', 'bullish': False})
+                    score -= 1
         
-        # Moving Average Analysis
-        if not pd.isna(latest['sma_20']) and not pd.isna(latest['sma_50']):
-            if latest['sma_20'] > latest['sma_50']:
-                signals.append('🟢 SMA Bullish Trend')
-                strength += 1
-            else:
-                signals.append('🔴 SMA Bearish Trend')
-                strength -= 1
+        # Moving Average Trend
+        if not pd.isna(latest['sma_7']) and not pd.isna(latest['sma_20']):
+            if latest['close'] > latest['sma_7'] > latest['sma_20']:
+                signals.append({'indicator': 'MA Trend', 'signal': 'Strong Uptrend', 'strength': 'Strong', 'bullish': True})
+                score += 2
+            elif latest['close'] > latest['sma_20']:
+                signals.append({'indicator': 'MA Trend', 'signal': 'Uptrend', 'strength': 'Medium', 'bullish': True})
+                score += 1
+            elif latest['close'] < latest['sma_7'] < latest['sma_20']:
+                signals.append({'indicator': 'MA Trend', 'signal': 'Strong Downtrend', 'strength': 'Strong', 'bullish': False})
+                score -= 2
+            elif latest['close'] < latest['sma_20']:
+                signals.append({'indicator': 'MA Trend', 'signal': 'Downtrend', 'strength': 'Medium', 'bullish': False})
+                score -= 1
+        
+        # Bollinger Bands
+        if all(col in df.columns for col in ['bb_upper', 'bb_lower', 'bb_middle']):
+            if latest['close'] > latest['bb_upper']:
+                signals.append({'indicator': 'Bollinger', 'signal': 'Overbought', 'strength': 'Medium', 'bullish': False})
+                score -= 1
+            elif latest['close'] < latest['bb_lower']:
+                signals.append({'indicator': 'Bollinger', 'signal': 'Oversold', 'strength': 'Medium', 'bullish': True})
+                score += 1
+        
+        # Volume confirmation
+        if latest['volume_ratio'] > 1.5:
+            signals.append({'indicator': 'Volume', 'signal': 'High Volume Confirmation', 'strength': 'Medium', 'bullish': None})
+        elif latest['volume_ratio'] < 0.5:
+            signals.append({'indicator': 'Volume', 'signal': 'Low Volume Warning', 'strength': 'Weak', 'bullish': None})
         
         # Final recommendation
-        if strength >= 2:
+        if score >= 4:
+            recommendation = 'STRONG BUY'
+            confidence = min(95, 70 + abs(score) * 5)
+        elif score >= 2:
             recommendation = 'BUY'
-            color = '🟢'
-        elif strength <= -2:
+            confidence = min(85, 60 + abs(score) * 5)
+        elif score <= -4:
+            recommendation = 'STRONG SELL'
+            confidence = min(95, 70 + abs(score) * 5)
+        elif score <= -2:
             recommendation = 'SELL'
-            color = '🔴'
+            confidence = min(85, 60 + abs(score) * 5)
         else:
             recommendation = 'HOLD'
-            color = '🟡'
+            confidence = 50
         
         return {
-            'timeframe': timeframe,
-            'price': latest['close'],
-            'recommendation': recommendation,
-            'strength': strength,
             'signals': signals,
-            'color': color,
-            'rsi': rsi if not pd.isna(rsi) else 0,
-            'volume_ratio': latest['volume_ratio'] if not pd.isna(latest['volume_ratio']) else 1
+            'score': score,
+            'recommendation': recommendation,
+            'confidence': confidence,
+            'rsi': latest['rsi'] if not pd.isna(latest['rsi']) else 50,
+            'macd_signal': 'Bullish' if latest['macd'] > latest['macd_signal'] else 'Bearish'
         }
     
-    def create_price_chart(self, df: pd.DataFrame, title: str) -> go.Figure:
-        """Create interactive price chart with indicators"""
+    def create_price_chart(self, df: pd.DataFrame, coin_name: str) -> go.Figure:
+        """Create comprehensive price chart"""
         fig = make_subplots(
-            rows=3, cols=1,
-            subplot_titles=('Price & Moving Averages', 'RSI', 'MACD'),
-            vertical_spacing=0.1,
-            row_heights=[0.6, 0.2, 0.2]
+            rows=4, cols=1,
+            subplot_titles=(
+                f'{coin_name} Price & Moving Averages', 
+                'RSI (Relative Strength Index)', 
+                'MACD',
+                'Volume'
+            ),
+            vertical_spacing=0.08,
+            row_heights=[0.5, 0.15, 0.15, 0.2]
         )
         
-        # Candlestick chart
+        # Price chart with moving averages
         fig.add_trace(
-            go.Candlestick(
-                x=df.index,
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close'],
-                name='Price'
-            ),
+            go.Scatter(x=df.index, y=df['close'], name='Price', 
+                      line=dict(color='white', width=2)),
             row=1, col=1
         )
         
-        # Moving averages
-        if 'sma_20' in df.columns:
+        if 'sma_7' in df.columns:
             fig.add_trace(
-                go.Scatter(x=df.index, y=df['sma_20'], name='SMA 20', line=dict(color='orange')),
+                go.Scatter(x=df.index, y=df['sma_7'], name='SMA 7', 
+                          line=dict(color='orange', width=1)),
                 row=1, col=1
             )
         
-        if 'sma_50' in df.columns:
+        if 'sma_20' in df.columns:
             fig.add_trace(
-                go.Scatter(x=df.index, y=df['sma_50'], name='SMA 50', line=dict(color='red')),
+                go.Scatter(x=df.index, y=df['sma_20'], name='SMA 20', 
+                          line=dict(color='blue', width=1)),
                 row=1, col=1
             )
         
         # Bollinger Bands
         if all(col in df.columns for col in ['bb_upper', 'bb_lower']):
             fig.add_trace(
-                go.Scatter(x=df.index, y=df['bb_upper'], name='BB Upper', 
+                go.Scatter(x=df.index, y=df['bb_upper'], name='BB Upper',
                           line=dict(color='gray', dash='dash'), opacity=0.5),
                 row=1, col=1
             )
@@ -233,309 +343,319 @@ class StreamlitTradingBot:
         # RSI
         if 'rsi' in df.columns:
             fig.add_trace(
-                go.Scatter(x=df.index, y=df['rsi'], name='RSI', line=dict(color='purple')),
+                go.Scatter(x=df.index, y=df['rsi'], name='RSI', 
+                          line=dict(color='purple')),
                 row=2, col=1
             )
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+            fig.add_hline(y=50, line_dash="dot", line_color="gray", row=2, col=1)
         
         # MACD
-        if all(col in df.columns for col in ['macd', 'macd_signal']):
+        if all(col in df.columns for col in ['macd', 'macd_signal', 'macd_histogram']):
             fig.add_trace(
-                go.Scatter(x=df.index, y=df['macd'], name='MACD', line=dict(color='blue')),
+                go.Scatter(x=df.index, y=df['macd'], name='MACD', 
+                          line=dict(color='blue')),
                 row=3, col=1
             )
             fig.add_trace(
-                go.Scatter(x=df.index, y=df['macd_signal'], name='Signal', line=dict(color='red')),
+                go.Scatter(x=df.index, y=df['macd_signal'], name='Signal', 
+                          line=dict(color='red')),
                 row=3, col=1
+            )
+            # MACD Histogram
+            colors = ['green' if val > 0 else 'red' for val in df['macd_histogram']]
+            fig.add_trace(
+                go.Bar(x=df.index, y=df['macd_histogram'], name='Histogram',
+                      marker_color=colors, opacity=0.6),
+                row=3, col=1
+            )
+        
+        # Volume
+        if 'volume' in df.columns:
+            fig.add_trace(
+                go.Bar(x=df.index, y=df['volume'], name='Volume',
+                      marker_color='rgba(0,100,200,0.6)'),
+                row=4, col=1
             )
         
         fig.update_layout(
-            title=title,
             template='plotly_dark',
             height=800,
-            showlegend=False
+            showlegend=False,
+            title_x=0.5
         )
+        
+        fig.update_xaxes(rangeslider_visible=False)
         
         return fig
 
 def main():
     # App header
-    st.title("📈 Advanced Crypto Trading Analysis Bot")
-    st.markdown("*Analyze cryptocurrency markets with advanced technical indicators and pattern recognition*")
+    st.title("📈 Advanced Crypto Trading Analysis")
+    st.markdown("*Professional cryptocurrency market analysis powered by CoinGecko*")
+    
+    # Initialize bot
+    bot = CoinGeckoTradingBot()
     
     # Sidebar controls
-    st.sidebar.header("🔧 Controls")
+    st.sidebar.header("🔧 Analysis Controls")
     
-    # Popular trading pairs
-    popular_pairs = [
-        'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT',
-        'DOT/USDT', 'LINK/USDT', 'LTC/USDT', 'BCH/USDT', 'UNI/USDT'
-    ]
+    # Get popular coins
+    with st.spinner("Loading available coins..."):
+        coin_options = {
+            'Bitcoin': 'bitcoin',
+            'Ethereum': 'ethereum', 
+            'Binance Coin': 'binancecoin',
+            'Cardano': 'cardano',
+            'XRP': 'ripple',
+            'Solana': 'solana',
+            'Polkadot': 'polkadot',
+            'Dogecoin': 'dogecoin',
+            'Avalanche': 'avalanche-2',
+            'Chainlink': 'chainlink'
+        }
     
-    # User inputs
-    symbol = st.sidebar.selectbox(
-        "📊 Select Trading Pair",
-        popular_pairs,
+    # Coin selection
+    selected_coin_name = st.sidebar.selectbox(
+        "📊 Select Cryptocurrency",
+        list(coin_options.keys()),
         index=0
     )
     
-    # Custom symbol input
-    custom_symbol = st.sidebar.text_input("Or enter custom pair (e.g., DOGE/USDT)")
-    if custom_symbol:
-        symbol = custom_symbol.upper()
+    coin_id = coin_options[selected_coin_name]
+    
+    # Analysis period
+    analysis_days = st.sidebar.selectbox(
+        "📅 Analysis Period",
+        [7, 14, 30, 90],
+        index=2
+    )
     
     # Analysis button
-    analyze_button = st.sidebar.button("🚀 Analyze Market", type="primary")
+    analyze_button = st.sidebar.button("🚀 Analyze Now", type="primary")
     
-    # Auto-refresh option
-    auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (30s)")
+    # Auto-refresh
+    auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (60s)")
     
     if auto_refresh:
-        time.sleep(30)
+        time.sleep(60)
         st.rerun()
     
     # Main analysis
-    if analyze_button or 'analysis_data' not in st.session_state:
-        with st.spinner(f'🔍 Analyzing {symbol}...'):
-            bot = StreamlitTradingBot('binance')
-            
+    if analyze_button or 'current_analysis' not in st.session_state:
+        with st.spinner(f'🔍 Analyzing {selected_coin_name}...'):
             try:
-                # Get multi-timeframe data
-                data = bot.get_multi_timeframe_data(symbol)
+                # Get current price info
+                price_info = bot.get_current_price_info(coin_id)
                 
-                if not data:
-                    st.error("❌ Failed to fetch market data. Please try again.")
+                if not price_info:
+                    st.error("❌ Failed to fetch coin data. Please try again.")
                     return
                 
-                # Store in session state
-                st.session_state.analysis_data = data
-                st.session_state.symbol = symbol
-                st.session_state.last_update = datetime.now()
+                # Get historical data
+                df = bot.get_price_data(coin_id, days=analysis_days)
+                
+                if df.empty:
+                    st.error("❌ No historical data available for this coin.")
+                    return
+                
+                # Calculate indicators
+                df = bot.calculate_technical_indicators(df)
+                
+                # Analyze signals
+                analysis = bot.analyze_signals(df)
+                
+                # Store in session
+                st.session_state.current_analysis = {
+                    'price_info': price_info,
+                    'df': df,
+                    'analysis': analysis,
+                    'coin_name': selected_coin_name,
+                    'last_update': datetime.now()
+                }
                 
             except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+                st.error(f"❌ Analysis failed: {str(e)}")
                 return
     
-    # Use cached data
-    if 'analysis_data' not in st.session_state:
-        st.info("👆 Click 'Analyze Market' to start analysis")
+    # Display results
+    if 'current_analysis' not in st.session_state:
+        st.info("👆 Select a coin and click 'Analyze Now' to begin analysis")
         return
     
-    data = st.session_state.analysis_data
-    symbol = st.session_state.symbol
+    data = st.session_state.current_analysis
+    price_info = data['price_info']
+    df = data['df']
+    analysis = data['analysis']
+    coin_name = data['coin_name']
     
-    # Header with last update
-    st.success(f"✅ Analysis complete for {symbol}")
-    st.caption(f"Last updated: {st.session_state.last_update.strftime('%Y-%m-%d %H:%M:%S')}")
+    # Success message
+    st.success(f"✅ Analysis complete for {coin_name}")
+    st.caption(f"Last updated: {data['last_update'].strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # Quick metrics
-    if '1h' in data and not data['1h'].empty:
-        latest_price = data['1h']['close'].iloc[-1]
-        price_change_24h = ((data['1h']['close'].iloc[-1] - data['1h']['close'].iloc[-24]) / data['1h']['close'].iloc[-24] * 100) if len(data['1h']) >= 24 else 0
-        volume_24h = data['1h']['volume'].tail(24).sum() if len(data['1h']) >= 24 else 0
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("💰 Current Price", f"${latest_price:.4f}")
-        
-        with col2:
-            st.metric("📈 24h Change", f"{price_change_24h:.2f}%", 
-                     delta=f"{price_change_24h:.2f}%")
-        
-        with col3:
-            st.metric("📊 24h Volume", f"{volume_24h:,.0f}")
-        
-        with col4:
-            latest_rsi = data['1h']['rsi'].iloc[-1] if not pd.isna(data['1h']['rsi'].iloc[-1]) else 50
-            rsi_color = "normal"
-            if latest_rsi > 70:
-                rsi_color = "off"
-            elif latest_rsi < 30:
-                rsi_color = "normal"
-            st.metric("⚡ RSI", f"{latest_rsi:.1f}", delta=None)
+    # Quick metrics row
+    col1, col2, col3, col4, col5 = st.columns(5)
     
-    # Multi-timeframe analysis
-    st.header("🕐 Multi-Timeframe Analysis")
+    with col1:
+        st.metric(
+            "💰 Current Price", 
+            f"${price_info['current_price']:,.4f}",
+            delta=f"{price_info['price_change_24h']:.2f}%"
+        )
     
-    timeframe_cols = st.columns(3)
-    bot = StreamlitTradingBot('binance')
+    with col2:
+        st.metric("📊 Market Cap Rank", f"#{price_info['market_cap_rank']}")
     
-    for i, (tf, df) in enumerate(data.items()):
-        if df.empty:
-            continue
-            
-        analysis = bot.analyze_timeframe(df, tf)
-        
-        with timeframe_cols[i]:
-            # Recommendation card
-            rec_color = "success" if analysis['recommendation'] == 'BUY' else "error" if analysis['recommendation'] == 'SELL' else "warning"
-            
-            with st.container():
-                st.subheader(f"{tf.upper()} Timeframe")
-                
-                # Recommendation badge
-                if analysis['recommendation'] == 'BUY':
-                    st.success(f"🟢 {analysis['recommendation']}")
-                elif analysis['recommendation'] == 'SELL':
-                    st.error(f"🔴 {analysis['recommendation']}")
-                else:
-                    st.warning(f"🟡 {analysis['recommendation']}")
-                
-                st.metric("Strength Score", analysis['strength'])
-                
-                # Signals
-                st.write("**Signals:**")
-                for signal in analysis['signals']:
-                    st.write(f"• {signal}")
+    with col3:
+        st.metric("📈 24h High", f"${price_info['high_24h']:,.4f}")
     
-    # Detailed Charts
-    st.header("📊 Technical Analysis Charts")
+    with col4:
+        st.metric("📉 24h Low", f"${price_info['low_24h']:,.4f}")
     
-    chart_timeframe = st.selectbox("Select timeframe for detailed chart:", 
-                                  list(data.keys()), 
-                                  index=0)
+    with col5:
+        st.metric("💨 24h Volume", f"${price_info['volume_24h']:,.0f}")
     
-    if chart_timeframe in data and not data[chart_timeframe].empty:
-        chart_df = data[chart_timeframe]
-        fig = bot.create_price_chart(chart_df, f"{symbol} - {chart_timeframe.upper()} Chart")
-        st.plotly_chart(fig, use_container_width=True)
+    # Main recommendation
+    rec = analysis['recommendation']
+    conf = analysis['confidence']
     
-    # Pattern Analysis
-    st.header("🔍 Pattern Recognition")
-    
-    patterns_detected = []
-    for tf, df in data.items():
-        if not df.empty:
-            patterns = bot.detect_chart_patterns(df)
-            for pattern in patterns:
-                pattern['timeframe'] = tf
-                patterns_detected.append(pattern)
-    
-    if patterns_detected:
-        for pattern in patterns_detected:
-            signal_color = "success" if pattern['signal'] == 'Bullish' else "error"
-            
-            with st.container():
-                col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-                
-                with col1:
-                    st.write(f"**{pattern['type']}**")
-                
-                with col2:
-                    if pattern['signal'] == 'Bullish':
-                        st.success(pattern['signal'])
-                    else:
-                        st.error(pattern['signal'])
-                
-                with col3:
-                    st.write(f"*{pattern['strength']}*")
-                
-                with col4:
-                    st.write(f"*{pattern['timeframe']}*")
+    if rec in ['BUY', 'STRONG BUY']:
+        st.success(f"🟢 **{rec}** (Confidence: {conf}%)")
+    elif rec in ['SELL', 'STRONG SELL']:
+        st.error(f"🔴 **{rec}** (Confidence: {conf}%)")
     else:
-        st.info("🔍 No significant patterns detected in current analysis window")
+        st.warning(f"🟡 **{rec}** (Confidence: {conf}%)")
     
-    # Market Regime
-    st.header("🌡️ Market Regime Analysis")
+    # Technical Analysis Chart
+    st.header("📊 Technical Analysis Chart")
     
-    if '1d' in data and not data['1d'].empty:
-        daily_df = data['1d']
+    fig = bot.create_price_chart(df, coin_name)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Detailed Analysis
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("🎯 Signal Analysis")
         
-        # Calculate regime metrics
-        current_price = daily_df['close'].iloc[-1]
-        sma_20 = daily_df['sma_20'].iloc[-1] if not pd.isna(daily_df['sma_20'].iloc[-1]) else current_price
-        sma_50 = daily_df['sma_50'].iloc[-1] if not pd.isna(daily_df['sma_50'].iloc[-1]) else current_price
-        
-        # Determine regime
-        if current_price > sma_20 > sma_50:
-            regime = "🟢 Strong Bull Market"
-            regime_color = "success"
-        elif current_price > sma_20:
-            regime = "🟢 Mild Bull Market"
-            regime_color = "success"
-        elif current_price < sma_20 < sma_50:
-            regime = "🔴 Strong Bear Market"
-            regime_color = "error"
-        elif current_price < sma_20:
-            regime = "🔴 Mild Bear Market"
-            regime_color = "error"
-        else:
-            regime = "🟡 Sideways Market"
-            regime_color = "warning"
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if regime_color == "success":
-                st.success(f"**Market Regime:** {regime}")
-            elif regime_color == "error":
-                st.error(f"**Market Regime:** {regime}")
+        for signal in analysis['signals']:
+            if signal['bullish'] is True:
+                st.success(f"🟢 **{signal['indicator']}**: {signal['signal']} ({signal['strength']})")
+            elif signal['bullish'] is False:
+                st.error(f"🔴 **{signal['indicator']}**: {signal['signal']} ({signal['strength']})")
             else:
-                st.warning(f"**Market Regime:** {regime}")
-        
-        with col2:
-            volatility = daily_df['close'].tail(20).std() / daily_df['close'].tail(20).mean() * 100
-            st.metric("Volatility (20d)", f"{volatility:.2f}%")
+                st.info(f"🟡 **{signal['indicator']}**: {signal['signal']} ({signal['strength']})")
     
-    # Trading Insights
+    with col2:
+        st.subheader("🔍 Pattern Recognition")
+        
+        patterns = bot.detect_chart_patterns(df)
+        
+        if patterns:
+            for pattern in patterns:
+                if pattern['signal'] == 'Bullish':
+                    st.success(f"🟢 **{pattern['type']}** - {pattern['description']}")
+                else:
+                    st.error(f"🔴 **{pattern['type']}** - {pattern['description']}")
+        else:
+            st.info("🔍 No significant patterns detected")
+    
+    # Market Insights
     st.header("💡 Trading Insights")
     
     insights = []
     
-    # Multi-timeframe confluence
-    recommendations = [bot.analyze_timeframe(df, tf)['recommendation'] for tf, df in data.items() if not df.empty]
+    # RSI insights
+    rsi = analysis['rsi']
+    if rsi < 30:
+        insights.append("🟢 **RSI suggests oversold conditions** - Potential buying opportunity")
+    elif rsi > 70:
+        insights.append("🔴 **RSI indicates overbought conditions** - Consider taking profits")
     
-    if recommendations.count('BUY') >= 2:
-        insights.append("🟢 **Multi-timeframe BUY confluence detected** - Strong bullish signal")
-    elif recommendations.count('SELL') >= 2:
-        insights.append("🔴 **Multi-timeframe SELL confluence detected** - Strong bearish signal")
-    elif len(set(recommendations)) == len(recommendations):
-        insights.append("🟡 **Mixed signals across timeframes** - Wait for clearer direction")
+    # Volatility insights
+    current_volatility = df['volatility'].iloc[-1] if not pd.isna(df['volatility'].iloc[-1]) else 0
+    avg_volatility = df['volatility'].mean()
     
-    # Volume insights
-    if '1h' in data and not data['1h'].empty:
-        latest_volume_ratio = data['1h']['volume_ratio'].iloc[-1]
-        if not pd.isna(latest_volume_ratio):
-            if latest_volume_ratio > 2:
-                insights.append("🔊 **Exceptional volume** - Strong institutional interest")
-            elif latest_volume_ratio < 0.3:
-                insights.append("🔇 **Low volume** - Lack of conviction in current move")
+    if current_volatility > avg_volatility * 1.5:
+        insights.append("⚠️ **High volatility detected** - Expect larger price swings")
+    elif current_volatility < avg_volatility * 0.5:
+        insights.append("😴 **Low volatility period** - Possible breakout incoming")
+    
+    # Trend insights
+    if analysis['score'] >= 3:
+        insights.append("🚀 **Multiple bullish signals converging** - Strong upward momentum")
+    elif analysis['score'] <= -3:
+        insights.append("📉 **Multiple bearish signals present** - Caution advised")
     
     if insights:
         for insight in insights:
             st.markdown(insight)
     else:
-        st.info("📊 Market showing normal trading conditions")
+        st.info("📊 Market showing balanced conditions - Monitor for clearer signals")
+    
+    # Technical Indicators Table
+    st.header("📋 Current Indicator Values")
+    
+    latest = df.iloc[-1]
+    
+    indicators_data = {
+        'Indicator': ['RSI (14)', 'MACD', 'SMA 7', 'SMA 20', 'BB Position', 'Stochastic %K'],
+        'Value': [
+            f"{latest['rsi']:.1f}" if not pd.isna(latest['rsi']) else 'N/A',
+            f"{latest['macd']:.6f}" if not pd.isna(latest['macd']) else 'N/A',
+            f"${latest['sma_7']:.4f}" if not pd.isna(latest['sma_7']) else 'N/A',
+            f"${latest['sma_20']:.4f}" if not pd.isna(latest['sma_20']) else 'N/A',
+            f"{((latest['close'] - latest['bb_lower']) / (latest['bb_upper'] - latest['bb_lower']) * 100):.1f}%" if all(not pd.isna(latest[col]) for col in ['bb_upper', 'bb_lower']) else 'N/A',
+            f"{latest['stoch_k']:.1f}" if not pd.isna(latest['stoch_k']) else 'N/A'
+        ],
+        'Signal': [
+            'Oversold' if latest['rsi'] < 30 else 'Overbought' if latest['rsi'] > 70 else 'Neutral',
+            'Bullish' if latest['macd'] > latest['macd_signal'] else 'Bearish',
+            'Above' if latest['close'] > latest['sma_7'] else 'Below',
+            'Above' if latest['close'] > latest['sma_20'] else 'Below', 
+            'Upper' if latest['close'] > latest['bb_upper'] else 'Lower' if latest['close'] < latest['bb_lower'] else 'Middle',
+            'Oversold' if latest['stoch_k'] < 20 else 'Overbought' if latest['stoch_k'] > 80 else 'Neutral'
+        ]
+    }
+    
+    indicators_df = pd.DataFrame(indicators_data)
+    st.dataframe(indicators_df, use_container_width=True)
     
     # Footer
     st.markdown("---")
-    st.markdown("*Disclaimer: This analysis is for educational purposes only. Always do your own research before making trading decisions.*")
+    st.markdown("### 📘 How to Read the Analysis")
+    st.markdown("""
+    **🟢 BUY signals:** Multiple bullish indicators align  
+    **🔴 SELL signals:** Multiple bearish indicators align  
+    **🟡 HOLD signals:** Mixed or neutral indicators  
+    
+    **RSI:** < 30 = Oversold (buy opportunity), > 70 = Overbought (sell opportunity)  
+    **MACD:** Above signal line = Bullish momentum  
+    **Moving Averages:** Price above = Uptrend, below = Downtrend  
+    """)
+    
+    st.markdown("*⚠️ Disclaimer: This analysis is for educational purposes only. Always conduct your own research before making trading decisions.*")
 
 # Sidebar info
 with st.sidebar:
     st.markdown("---")
-    st.markdown("### 📖 How to Use")
+    st.markdown("### 📖 About This Bot")
     st.markdown("""
-    1. **Select** a trading pair
-    2. **Click** 'Analyze Market'
-    3. **Review** multi-timeframe signals
-    4. **Check** pattern recognition
-    5. **Consider** market regime
-    
-    **Green** = Bullish signals
-    **Red** = Bearish signals  
-    **Yellow** = Neutral/Hold
+    **Data Source:** CoinGecko API  
+    **Update Frequency:** Real-time  
+    **Analysis Type:** Technical Analysis  
+    **Indicators Used:** RSI, MACD, Moving Averages, Bollinger Bands, Volume
     """)
     
-    st.markdown("### ⚙️ Features")
+    st.markdown("### 🎯 Features")
     st.markdown("""
-    - 🕐 Multi-timeframe analysis
-    - 📊 Technical indicators
-    - 🔍 Pattern recognition
-    - 🌡️ Market regime detection
-    - 📈 Interactive charts
+    - ✅ Real-time price data
+    - ✅ Multi-indicator analysis  
+    - ✅ Pattern recognition
+    - ✅ Interactive charts
+    - ✅ Clear buy/sell signals
+    - ✅ No geo-restrictions
     """)
 
 if __name__ == "__main__":
