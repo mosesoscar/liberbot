@@ -21,7 +21,7 @@ class OptimizedCoinGeckoBot:
     def __init__(self):
         """Initialize the optimized trading analysis bot using CoinGecko API"""
         self.base_url = "https://api.coingecko.com/api/v3"
-        self.request_delay = 0.6  # Delay between requests to avoid rate limits
+        self.request_delay = 2.5  # Delay between requests to avoid rate limits
         self.last_request_time = 0
         
     def _rate_limit_delay(self):
@@ -52,7 +52,7 @@ class OptimizedCoinGeckoBot:
                     return None
         return None
     
-    @st.cache_data(ttl=7200)  # Cache for 2 hours - coin list doesn't change often
+    @st.cache_data(ttl=14400)  # Cache for 2 hours - coin list doesn't change often
     def get_all_coins_list(_self):
         """Get a comprehensive list of all available coins with their IDs and symbols for search."""
         try:
@@ -64,7 +64,7 @@ class OptimizedCoinGeckoBot:
             st.error(f"An unexpected error occurred while fetching coin list: {e}")
             return {}
 
-    @st.cache_data(ttl=600)  # Cache for 10 minutes
+    @st.cache_data(ttl=1800)  # Cache for 10 minutes
     def get_popular_coins_batch(_self, limit: int = 100):
         """Get popular coins data in a single batch request"""
         try:
@@ -105,7 +105,7 @@ class OptimizedCoinGeckoBot:
             st.error(f"Error fetching popular coins: {e}")
             return {}, {}
     
-    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    @st.cache_data(ttl=900)  # Cache for 5 minutes
     def get_comprehensive_coin_data(_self, coin_id: str, days: int = 30) -> tuple:
         """Fetch all required data for a coin in optimized batch calls"""
         try:
@@ -172,7 +172,7 @@ class OptimizedCoinGeckoBot:
             st.error(f"Error fetching comprehensive coin data: {e}")
             return pd.DataFrame(), {}
     
-    @st.cache_data(ttl=1800)  # Cache for 30 minutes - trending data changes slowly
+    @st.cache_data(ttl=3600)  # Cache for 30 minutes - trending data changes slowly
     def get_trending_coins(_self) -> List[dict]:
         """Get trending coins for quick suggestions"""
         try:
@@ -647,7 +647,7 @@ def main():
     with col1:
         st.metric("🔗 API Source", "CoinGecko")
     with col2:
-        st.metric("⚡ Rate Limit", "30-50/min")
+        st.metric("⚡ Rate Limit", "10-30/min")
     with col3:
         st.metric("📊 Free Tier", "Full OHLC Data")
     
@@ -656,7 +656,7 @@ def main():
     
     # Preload popular coins for faster initial load
     with st.spinner("Loading cryptocurrency database..."):
-        popular_coins, popular_coins_data = bot.get_popular_coins_batch(150)
+        popular_coins, popular_coins_data = bot.get_popular_coins_batch(50)
         all_coins_data = bot.get_all_coins_list()
     
     all_coin_names = sorted(list(all_coins_data.keys())) if all_coins_data else []
