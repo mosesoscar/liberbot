@@ -52,60 +52,7 @@ class OptimizedCoinGeckoBot:
                     return None
         return None
     
-    @st.cache_data(ttl=14400)  # Cache for 2 hours - coin list doesn't change often
-    def get_all_coins_list(_self):
-        """Get a comprehensive list of all available coins with their IDs and symbols for search."""
-        try:
-            data = _self._make_request(f"{_self.base_url}/coins/list")
-            if data:
-                return {coin['name']: {'id': coin['id'], 'symbol': coin['symbol'].upper()} for coin in data}
-            return {}
-        except Exception as e:
-            st.error(f"An unexpected error occurred while fetching coin list: {e}")
-            return {}
-
-    @st.cache_data(ttl=1800)  # Cache for 10 minutes
-    def get_popular_coins_batch(_self, limit: int = 100):
-        """Get popular coins data in a single batch request"""
-        try:
-            params = {
-                'vs_currency': 'usd', 
-                'order': 'market_cap_desc', 
-                'per_page': limit,
-                'page': 1,
-                'sparkline': False,
-                'price_change_percentage': '24h,7d'
-            }
-            
-            data = _self._make_request(f"{_self.base_url}/coins/markets", params)
-            if data:
-                # Store both the list for dropdown and detailed data for quick access
-                coin_dict = {}
-                detailed_data = {}
-                
-                for coin in data:
-                    coin_dict[coin['name']] = coin['id']
-                    detailed_data[coin['id']] = {
-                        'current_price': coin['current_price'],
-                        'price_change_24h': coin['price_change_percentage_24h'],
-                        'price_change_7d': coin.get('price_change_percentage_7d', 0),
-                        'market_cap': coin['market_cap'],
-                        'volume_24h': coin['total_volume'],
-                        'high_24h': coin['high_24h'],
-                        'low_24h': coin['low_24h'],
-                        'market_cap_rank': coin['market_cap_rank'],
-                        'name': coin['name'],
-                        'symbol': coin['symbol'].upper(),
-                        'last_updated': coin['last_updated']
-                    }
-                
-                return coin_dict, detailed_data
-            return {}, {}
-        except Exception as e:
-            st.error(f"Error fetching popular coins: {e}")
-            return {}, {}
-    
-    @st.cache_data(ttl=900)  # Cache for 5 minutes
+    @st.cache_data(ttl=900)  # Cache for 15 minutes
     def get_comprehensive_coin_data(_self, coin_id: str, days: int = 30) -> tuple:
         """Fetch all required data for a coin in optimized batch calls"""
         try:
@@ -171,26 +118,6 @@ class OptimizedCoinGeckoBot:
         except Exception as e:
             st.error(f"Error fetching comprehensive coin data: {e}")
             return pd.DataFrame(), {}
-    
-    @st.cache_data(ttl=3600)  # Cache for 30 minutes - trending data changes slowly
-    def get_trending_coins(_self) -> List[dict]:
-        """Get trending coins for quick suggestions"""
-        try:
-            data = _self._make_request(f"{_self.base_url}/search/trending")
-            if data and 'coins' in data:
-                return [
-                    {
-                        'name': coin['item']['name'],
-                        'id': coin['item']['id'],
-                        'symbol': coin['item']['symbol'],
-                        'rank': coin['item']['market_cap_rank']
-                    }
-                    for coin in data['coins']
-                ]
-            return []
-        except Exception as e:
-            st.warning(f"Could not fetch trending coins: {e}")
-            return []
     
     def calculate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate technical indicators with improved error handling"""
@@ -634,9 +561,148 @@ class OptimizedCoinGeckoBot:
         
         return fig
 
+# Predefined coins list - no API calls needed for coin selection
+PREDEFINED_COINS = {
+    'Bitcoin': 'bitcoin',
+    'Ethereum': 'ethereum',
+    'Tether': 'tether',
+    'BNB': 'binancecoin',
+    'Solana': 'solana',
+    'USDC': 'usd-coin',
+    'XRP': 'ripple',
+    'Lido Staked Ether': 'staked-ether',
+    'Toncoin': 'the-open-network',
+    'Dogecoin': 'dogecoin',
+    'Cardano': 'cardano',
+    'TRON': 'tron',
+    'Avalanche': 'avalanche-2',
+    'Wrapped Bitcoin': 'wrapped-bitcoin',
+    'Shiba Inu': 'shiba-inu',
+    'Chainlink': 'chainlink',
+    'Bitcoin Cash': 'bitcoin-cash',
+    'Polkadot': 'polkadot',
+    'Polygon': 'matic-network',
+    'Litecoin': 'litecoin',
+    'Near Protocol': 'near',
+    'Uniswap': 'uniswap',
+    'Internet Computer': 'internet-computer',
+    'Pepe': 'pepe',
+    'Dai': 'dai',
+    'Ethereum Classic': 'ethereum-classic',
+    'Aptos': 'aptos',
+    'Fetch.ai': 'fetch-ai',
+    'Monero': 'monero',
+    'Stellar': 'stellar',
+    'Arbitrum': 'arbitrum',
+    'VeChain': 'vechain',
+    'Filecoin': 'filecoin',
+    'Cosmos': 'cosmos',
+    'Hedera': 'hedera-hashgraph',
+    'Cronos': 'crypto-com-chain',
+    'OKB': 'okb',
+    'Algorand': 'algorand',
+    'Optimism': 'optimism',
+    'Fantom': 'fantom',
+    'Theta Network': 'theta-token',
+    'The Graph': 'the-graph',
+    'Aave': 'aave',
+    'Quant': 'quant-network',
+    'Flow': 'flow',
+    'MultiversX': 'elrond-erd-2',
+    'ImmutableX': 'immutable-x',
+    'Tezos': 'tezos',
+    'Sandbox': 'the-sandbox',
+    'Axie Infinity': 'axie-infinity',
+    'Bitcoin SV': 'bitcoin-cash-sv',
+    'Chiliz': 'chiliz',
+    'Decentraland': 'decentraland',
+    'EOS': 'eos',
+    'Klaytn': 'klay-token',
+    'IOTA': 'iota',
+    'Maker': 'maker',
+    'Compound': 'compound-governance-token',
+    'Zcash': 'zcash',
+    'Synthetix': 'havven',
+    'Neo': 'neo',
+    'Dash': 'dash',
+    'UNUS SED LEO': 'leo-token',
+    'Curve DAO Token': 'curve-dao-token',
+    'Amp': 'amp-token',
+    'Pancakeswap': 'pancakeswap-token',
+    'Yearn Finance': 'yearn-finance',
+    'Sushi': 'sushi',
+    '1inch': '1inch',
+    'Basic Attention Token': 'basic-attention-token',
+    'Enjin Coin': 'enjincoin',
+    'Loopring': 'loopring',
+    'Zilliqa': 'zilliqa',
+    'OMG Network': 'omisego',
+    'Qtum': 'qtum',
+    'Waves': 'waves',
+    'Gala': 'gala',
+    'Harmony': 'harmony',
+    'Celo': 'celo',
+    'Ren': 'republic-protocol',
+    'Storj': 'storj',
+    'Ocean Protocol': 'ocean-protocol',
+    'Numeraire': 'numeraire',
+    'Bancor': 'bancor',
+    'SKALE Network': 'skale',
+    'Livepeer': 'livepeer',
+    'Origin Protocol': 'origin-protocol',
+    'Balancer': 'balancer',
+    'API3': 'api3',
+    'Rally': 'rally-2',
+    'Keep Network': 'keep-network',
+    'NuCypher': 'nucypher',
+    'Ankr': 'ankr',
+    'Civic': 'civic',
+    'District0x': 'district0x',
+    'Request': 'request-network',
+    'Power Ledger': 'power-ledger',
+    'Metal': 'metal',
+    'Status': 'status',
+    'Golem': 'golem',
+    'Aragon': 'aragon',
+    'Gnosis': 'gnosis',
+    'Augur': 'augur-v2',
+    'iExec RLC': 'iexec-rlc',
+    'Polymath': 'polymath-network',
+    'Substratum': 'substratum',
+    'Render Token': 'render-token',
+    'Jupiter': 'jupiter-exchange-solana',
+    'Pyth Network': 'pyth-network',
+    'Jito': 'jito-governance-token',
+    'Bonk': 'bonk',
+    'Manta Network': 'manta-network',
+    'JasmyCoin': 'jasmycoin',
+    'Sei': 'sei-network',
+    'Blur': 'blur',
+    'Meme': 'memecoin',
+    'Popcat': 'popcat',
+    'Worldcoin': 'worldcoin-wld',
+    'Sui': 'sui',
+    'Mantle': 'mantle',
+    'Celestia': 'celestia',
+    'Injective': 'injective-protocol',
+    'Brett': 'based-brett',
+    'Ondo': 'ondo-finance',
+    'Wormhole': 'wormhole',
+    'Starknet': 'starknet',
+    'Immutable': 'immutable-x',
+    'NotCoin': 'notcoin',
+    'THORChain': 'thorchain',
+    'Floki': 'floki',
+    'Kaspa': 'kaspa',
+    'dYdX': 'dydx-chain',
+    'Ethena': 'ethena',
+    'Arweave': 'arweave',
+    'LayerZero': 'layerzero'
+}
+
 def main():
     # App header with enhanced info
-    st.title("📈 Advanced Crypto Trading Analysis")
+    st.title("Advanced Crypto Trading Analysis")
     st.markdown("*Professional cryptocurrency market analysis powered by CoinGecko API*")
     
     # Initialize bot
@@ -645,73 +711,29 @@ def main():
     # Show API status
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("🔗 API Source", "CoinGecko")
+        st.metric("API Source", "CoinGecko")
     with col2:
-        st.metric("⚡ Rate Limit", "10-30/min")
+        st.metric("Rate Limit", "10-30/min")
     with col3:
-        st.metric("📊 Free Tier", "Full OHLC Data")
+        st.metric("Free Tier", "Full OHLC Data")
     
     # Sidebar controls
-    st.sidebar.header("🔧 Analysis Controls")
+    st.sidebar.header("Analysis Controls")
     
-    # Preload popular coins for faster initial load
-    with st.spinner("Loading cryptocurrency database..."):
-        popular_coins, popular_coins_data = bot.get_popular_coins_batch(50)
-        all_coins_data = bot.get_all_coins_list()
+    # Use predefined coins - no API calls needed
+    all_coin_names = sorted(list(PREDEFINED_COINS.keys()))
     
-    all_coin_names = sorted(list(all_coins_data.keys())) if all_coins_data else []
-    
-    # Add trending coins section
-    trending_coins = bot.get_trending_coins()
-    if trending_coins:
-        st.sidebar.subheader("🔥 Trending Now")
-        trending_names = [f"🔥 {coin['name']} ({coin['symbol']})" for coin in trending_coins[:5]]
-        selected_trending = st.sidebar.selectbox(
-            "Quick select trending coins",
-            [""] + trending_names,
-            index=0
-        )
-        
-        if selected_trending:
-            # Extract coin name from trending selection
-            trending_coin_name = selected_trending.split("🔥 ")[1].split(" (")[0]
-            # Find the coin in our data
-            for name, data in all_coins_data.items():
-                if name == trending_coin_name:
-                    st.session_state.selected_coin_name = name
-                    st.session_state.selected_coin_id = data['id']
-                    break
-
-    # Search feature with improved UX
+    # Local search through predefined coins
     search_query = st.sidebar.text_input(
-        "🔍 Search for a Cryptocurrency", 
-        placeholder="Type coin name or symbol (e.g., Bitcoin, BTC)",
+        "Search Cryptocurrencies", 
+        placeholder="Type coin name (e.g., Bitcoin, Ethereum)",
         value=""
     ).strip()
     
-    # Coin selection logic
-    selected_coin_name = None
-    coin_id = None
-
+    # Filter predefined coins locally
     if search_query:
-        # Filter coins based on search query with improved matching
-        filtered_coins = []
         search_lower = search_query.lower()
-        
-        for name in all_coin_names:
-            coin_data = all_coins_data[name]
-            # Match by name, symbol, or partial name
-            if (search_lower in name.lower() or 
-                search_lower == coin_data['symbol'].lower() or
-                search_lower in coin_data['symbol'].lower()):
-                filtered_coins.append(name)
-        
-        # Sort by relevance (exact matches first)
-        filtered_coins.sort(key=lambda x: (
-            0 if search_lower == all_coins_data[x]['symbol'].lower() else
-            1 if x.lower().startswith(search_lower) else
-            2
-        ))
+        filtered_coins = [name for name in all_coin_names if search_lower in name.lower()]
         
         if filtered_coins:
             selected_coin_name = st.sidebar.selectbox(
@@ -719,53 +741,37 @@ def main():
                 filtered_coins,
                 index=0
             )
-            coin_id = all_coins_data[selected_coin_name]['id']
         else:
-            st.sidebar.warning("No coins found matching your search.")
-            if st.sidebar.button("🔄 Refresh coin database"):
-                st.cache_data.clear()
-                st.rerun()
+            st.sidebar.warning("No coins found in predefined list.")
+            selected_coin_name = None
     else:
-        # Use preloaded popular coins for faster selection
-        if popular_coins:
-            selected_coin_name = st.sidebar.selectbox(
-                "📊 Select a Popular Cryptocurrency",
-                list(popular_coins.keys()),
-                index=0
-            )
-            coin_id = popular_coins[selected_coin_name]
-        else:
-            st.sidebar.error("Could not load popular coins. Please try searching.")
+        selected_coin_name = st.sidebar.selectbox(
+            "Select Cryptocurrency",
+            all_coin_names,
+            index=0
+        )
+
+    coin_id = PREDEFINED_COINS.get(selected_coin_name) if selected_coin_name else None
 
     # Enhanced analysis controls
     st.sidebar.markdown("---")
     analysis_days = st.sidebar.selectbox(
-        "📅 Analysis Period",
+        "Analysis Period",
         [7, 14, 30, 90, 180],
         index=2,
         help="Longer periods provide more reliable signals but slower loading"
     )
     
-    # Show quick info for selected coin if available in cache
-    if coin_id and coin_id in popular_coins_data:
-        quick_info = popular_coins_data[coin_id]
-        st.sidebar.markdown("### 📊 Quick Info")
-        st.sidebar.metric(
-            "Current Price", 
-            f"${quick_info['current_price']:,.4f}",
-            delta=f"{quick_info['price_change_24h']:.2f}%"
-        )
-    
     # Analysis button
     analyze_button = st.sidebar.button(
-        "🚀 Analyze Now", 
+        "Analyze Now", 
         type="primary", 
         disabled=(coin_id is None),
         help="Start comprehensive technical analysis"
     )
     
     # Auto-refresh with better UX
-    auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (60s)")
+    auto_refresh = st.sidebar.checkbox("Auto-refresh (60s)")
     if auto_refresh:
         st.sidebar.info("Auto-refresh enabled - data will update every minute")
     
@@ -776,7 +782,7 @@ def main():
     if analyze_button:
         trigger_analysis = True
     elif ('current_analysis' not in st.session_state and coin_id and 
-          st.sidebar.button("📈 Quick Analysis", help="Fast analysis with cached data")):
+          st.sidebar.button("Quick Analysis", help="Fast analysis with cached data")):
         trigger_analysis = True
     elif ('current_analysis' in st.session_state and coin_id and 
           st.session_state.current_analysis.get('coin_id') != coin_id):
@@ -793,40 +799,40 @@ def main():
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        with st.spinner(f'🔍 Analyzing {selected_coin_name}...'):
+        with st.spinner(f'Analyzing {selected_coin_name}...'):
             try:
                 # Step 1: Get comprehensive data (optimized batch call)
-                status_text.text("📡 Fetching market data...")
+                status_text.text("Fetching market data...")
                 progress_bar.progress(25)
                 
                 df, price_info = bot.get_comprehensive_coin_data(coin_id, days=analysis_days)
                 
                 if not price_info or df.empty:
-                    st.error("❌ Failed to fetch coin data. Please try again or search for a different coin.")
+                    st.error("Failed to fetch coin data. Please try again or search for a different coin.")
                     progress_bar.empty()
                     status_text.empty()
                     return
                 
                 # Step 2: Calculate technical indicators
-                status_text.text("🧮 Calculating technical indicators...")
+                status_text.text("Calculating technical indicators...")
                 progress_bar.progress(60)
                 
                 df = bot.calculate_technical_indicators(df)
                 
                 # Step 3: Analyze signals
-                status_text.text("🎯 Analyzing market signals...")
+                status_text.text("Analyzing market signals...")
                 progress_bar.progress(80)
                 
                 analysis = bot.analyze_signals(df)
                 
                 if 'error' in analysis:
-                    st.error(f"❌ Analysis failed: {analysis['error']}")
+                    st.error(f"Analysis failed: {analysis['error']}")
                     progress_bar.empty()
                     status_text.empty()
                     return
                 
                 # Step 4: Store results
-                status_text.text("✅ Analysis complete!")
+                status_text.text("Analysis complete!")
                 progress_bar.progress(100)
                 
                 st.session_state.current_analysis = {
@@ -845,25 +851,25 @@ def main():
                 status_text.empty()
                 
             except Exception as e:
-                st.error(f"❌ Analysis failed: {str(e)}")
+                st.error(f"Analysis failed: {str(e)}")
                 progress_bar.empty()
                 status_text.empty()
                 return
     
     # Display results
     if 'current_analysis' not in st.session_state or st.session_state.current_analysis is None:
-        st.info("👆 Search for a coin or select from popular options, then click 'Analyze Now' to begin comprehensive analysis.")
+        st.info("Search for a coin or select from the dropdown, then click 'Analyze Now' to begin comprehensive analysis.")
         
-        # Show trending coins as quick options
-        if trending_coins:
-            st.subheader("🔥 Trending Cryptocurrencies")
-            cols = st.columns(5)
-            for i, coin in enumerate(trending_coins[:5]):
-                with cols[i]:
-                    if st.button(f"📊 {coin['symbol']}", key=f"trending_{i}"):
-                        st.session_state.selected_coin_name = coin['name']
-                        st.session_state.selected_coin_id = coin['id']
-                        st.rerun()
+        # Show some predefined coins as quick options
+        st.subheader("Popular Cryptocurrencies")
+        popular_selection = ['Bitcoin', 'Ethereum', 'Solana', 'Cardano', 'Polygon']
+        cols = st.columns(5)
+        for i, coin in enumerate(popular_selection):
+            with cols[i]:
+                if st.button(f"{coin}", key=f"popular_{i}"):
+                    st.session_state.selected_coin_name = coin
+                    st.session_state.selected_coin_id = PREDEFINED_COINS[coin]
+                    st.rerun()
         return
     
     # Extract analysis data
@@ -874,12 +880,12 @@ def main():
     coin_name = data['coin_name']
     
     # Success message with timestamp
-    st.success(f"✅ Analysis complete for {coin_name} ({price_info['symbol']})")
+    st.success(f"Analysis complete for {coin_name} ({price_info['symbol']})")
     col1, col2 = st.columns([3, 1])
     with col1:
         st.caption(f"Last updated: {data['last_update'].strftime('%Y-%m-%d %H:%M:%S')} | Period: {data['analysis_period']} days")
     with col2:
-        if st.button("🔄 Refresh Analysis"):
+        if st.button("Refresh Analysis"):
             st.cache_data.clear()
             st.rerun()
     
@@ -888,40 +894,40 @@ def main():
     
     with col1:
         st.metric(
-            "💰 Current Price", 
+            "Current Price", 
             f"${price_info['current_price']:,.6f}" if price_info['current_price'] < 1 else f"${price_info['current_price']:,.2f}",
             delta=f"{price_info['price_change_24h']:.2f}%"
         )
     
     with col2:
         st.metric(
-            "📊 Rank", 
+            "Rank", 
             f"#{price_info['market_cap_rank']}",
             help="Market cap ranking"
         )
     
     with col3:
         st.metric(
-            "📈 24h High", 
+            "24h High", 
             f"${price_info['high_24h']:,.6f}" if price_info['high_24h'] < 1 else f"${price_info['high_24h']:,.2f}"
         )
     
     with col4:
         st.metric(
-            "📉 24h Low", 
+            "24h Low", 
             f"${price_info['low_24h']:,.6f}" if price_info['low_24h'] < 1 else f"${price_info['low_24h']:,.2f}"
         )
     
     with col5:
         st.metric(
-            "💨 Volume", 
+            "Volume", 
             f"${price_info['volume_24h']:,.0f}"
         )
     
     with col6:
         if 'price_change_7d' in price_info:
             st.metric(
-                "📅 7d Change",
+                "7d Change",
                 f"{price_info['price_change_7d']:.2f}%"
             )
     
@@ -932,22 +938,22 @@ def main():
     
     # Color-coded recommendation with score
     if rec in ['BUY', 'STRONG BUY', 'WEAK BUY']:
-        st.success(f"🟢 **{rec}** (Confidence: {conf}% | Score: +{score})")
+        st.success(f"**{rec}** (Confidence: {conf}% | Score: +{score})")
     elif rec in ['SELL', 'STRONG SELL', 'WEAK SELL']:
-        st.error(f"🔴 **{rec}** (Confidence: {conf}% | Score: {score})")
+        st.error(f"**{rec}** (Confidence: {conf}% | Score: {score})")
     else:
-        st.warning(f"🟡 **{rec}** (Confidence: {conf}% | Score: {score})")
+        st.warning(f"**{rec}** (Confidence: {conf}% | Score: {score})")
     
     # Add risk assessment
     if 'volatility' in df.columns:
         avg_volatility = df['volatility'].mean()
         if avg_volatility > 15:
-            st.warning("⚠️ **High Risk Asset** - Significant price volatility detected")
+            st.warning("**High Risk Asset** - Significant price volatility detected")
         elif avg_volatility < 5:
-            st.info("🛡️ **Lower Risk Asset** - Relatively stable price movements")
+            st.info("**Lower Risk Asset** - Relatively stable price movements")
     
     # Technical Analysis Chart
-    st.header("📊 Technical Analysis Chart")
+    st.header("Technical Analysis Chart")
     
     fig = bot.create_price_chart(df, coin_name)
     st.plotly_chart(fig, use_container_width=True)
@@ -956,7 +962,7 @@ def main():
     col1, col2 = st.columns([1.2, 0.8])
     
     with col1:
-        st.subheader("🎯 Signal Analysis")
+        st.subheader("Signal Analysis")
         
         # Group signals by strength for better readability
         strong_signals = [s for s in analysis['signals'] if s['strength'] in ['Very Strong', 'Strong']]
@@ -964,54 +970,54 @@ def main():
         weak_signals = [s for s in analysis['signals'] if s['strength'] == 'Weak']
         
         if strong_signals:
-            st.markdown("**🔥 Strong Signals:**")
+            st.markdown("**Strong Signals:**")
             for signal in strong_signals:
                 if signal['bullish'] is True:
-                    st.success(f"🟢 **{signal['indicator']}**: {signal['signal']}")
+                    st.success(f"**{signal['indicator']}**: {signal['signal']}")
                 elif signal['bullish'] is False:
-                    st.error(f"🔴 **{signal['indicator']}**: {signal['signal']}")
+                    st.error(f"**{signal['indicator']}**: {signal['signal']}")
                 else:
-                    st.info(f"🟡 **{signal['indicator']}**: {signal['signal']}")
+                    st.info(f"**{signal['indicator']}**: {signal['signal']}")
         
         if medium_signals:
-            st.markdown("**📊 Medium Signals:**")
+            st.markdown("**Medium Signals:**")
             for signal in medium_signals:
                 if signal['bullish'] is True:
-                    st.success(f"🟢 {signal['indicator']}: {signal['signal']}")
+                    st.success(f"{signal['indicator']}: {signal['signal']}")
                 elif signal['bullish'] is False:
-                    st.error(f"🔴 {signal['indicator']}: {signal['signal']}")
+                    st.error(f"{signal['indicator']}: {signal['signal']}")
                 else:
-                    st.info(f"🟡 {signal['indicator']}: {signal['signal']}")
+                    st.info(f"{signal['indicator']}: {signal['signal']}")
         
         if weak_signals:
-            with st.expander("📉 Weak Signals"):
+            with st.expander("Weak Signals"):
                 for signal in weak_signals:
                     if signal['bullish'] is True:
-                        st.success(f"🟢 {signal['indicator']}: {signal['signal']}")
+                        st.success(f"{signal['indicator']}: {signal['signal']}")
                     elif signal['bullish'] is False:
-                        st.error(f"🔴 {signal['indicator']}: {signal['signal']}")
+                        st.error(f"{signal['indicator']}: {signal['signal']}")
                     else:
-                        st.info(f"🟡 {signal['indicator']}: {signal['signal']}")
+                        st.info(f"{signal['indicator']}: {signal['signal']}")
     
     with col2:
-        st.subheader("🔍 Pattern Recognition")
+        st.subheader("Pattern Recognition")
         
         patterns = bot.detect_chart_patterns(df)
         
         if patterns:
             for pattern in patterns:
                 if pattern['signal'] == 'Bullish':
-                    st.success(f"🟢 **{pattern['type']}**")
+                    st.success(f"**{pattern['type']}**")
                     st.caption(pattern['description'])
                 else:
-                    st.error(f"🔴 **{pattern['type']}**")
+                    st.error(f"**{pattern['type']}**")
                     st.caption(pattern['description'])
         else:
-            st.info("🔍 No significant patterns detected")
+            st.info("No significant patterns detected")
         
         # Add additional market info
         if price_info.get('ath') and price_info.get('atl'):
-            st.markdown("### 📈 Price Levels")
+            st.markdown("### Price Levels")
             current = price_info['current_price']
             ath = price_info['ath']
             atl = price_info['atl']
@@ -1019,34 +1025,34 @@ def main():
             ath_distance = ((ath - current) / current) * 100
             atl_distance = ((current - atl) / atl) * 100
             
-            st.metric("🏆 All-Time High", f"${ath:,.2f}", f"{ath_distance:.1f}% away")
-            st.metric("🔻 All-Time Low", f"${atl:.6f}" if atl < 1 else f"${atl:,.2f}", f"+{atl_distance:.1f}% above")
+            st.metric("All-Time High", f"${ath:,.2f}", f"{ath_distance:.1f}% away")
+            st.metric("All-Time Low", f"${atl:.6f}" if atl < 1 else f"${atl:,.2f}", f"+{atl_distance:.1f}% above")
     
     # Enhanced Market Insights
-    st.header("💡 Trading Insights & Recommendations")
+    st.header("Trading Insights & Recommendations")
     
     insights = []
     
     # RSI insights with multiple levels
     rsi = analysis['rsi']
     if rsi < 25:
-        insights.append("🟢 **Extremely Oversold** - Strong buying opportunity, but wait for confirmation")
+        insights.append("**Extremely Oversold** - Strong buying opportunity, but wait for confirmation")
     elif rsi < 30:
-        insights.append("🟢 **RSI Oversold** - Potential buying opportunity")
+        insights.append("**RSI Oversold** - Potential buying opportunity")
     elif rsi > 75:
-        insights.append("🔴 **Extremely Overbought** - High risk, consider taking profits")
+        insights.append("**Extremely Overbought** - High risk, consider taking profits")
     elif rsi > 70:
-        insights.append("🔴 **RSI Overbought** - Consider reducing position size")
+        insights.append("**RSI Overbought** - Consider reducing position size")
     
     # Volume insights
     if 'volume_ratio' in df.columns and not pd.isna(df['volume_ratio'].iloc[-1]):
         vol_ratio = df['volume_ratio'].iloc[-1]
         if vol_ratio > 2.5:
-            insights.append("📈 **Exceptional volume spike** - Major market interest, trend likely to continue")
+            insights.append("**Exceptional volume spike** - Major market interest, trend likely to continue")
         elif vol_ratio > 1.5:
-            insights.append("📊 **High volume confirmation** - Current trend has strong support")
+            insights.append("**High volume confirmation** - Current trend has strong support")
         elif vol_ratio < 0.5:
-            insights.append("📉 **Low volume warning** - Weak trend, be cautious of reversals")
+            insights.append("**Low volume warning** - Weak trend, be cautious of reversals")
     
     # Volatility insights
     if 'volatility' in df.columns:
@@ -1054,26 +1060,26 @@ def main():
         avg_volatility = df['volatility'].mean()
         
         if current_volatility > avg_volatility * 2:
-            insights.append("⚠️ **Extreme volatility** - Use smaller position sizes and tighter stops")
+            insights.append("**Extreme volatility** - Use smaller position sizes and tighter stops")
         elif current_volatility > avg_volatility * 1.5:
-            insights.append("⚠️ **High volatility** - Expect larger price swings")
+            insights.append("**High volatility** - Expect larger price swings")
         elif current_volatility < avg_volatility * 0.5:
-            insights.append("😴 **Low volatility** - Possible breakout incoming, watch for volume spike")
+            insights.append("**Low volatility** - Possible breakout incoming, watch for volume spike")
     
     # Trend strength insights
     if analysis['score'] >= 5:
-        insights.append("🚀 **Very strong bullish convergence** - Multiple timeframes align bullishly")
+        insights.append("**Very strong bullish convergence** - Multiple timeframes align bullishly")
     elif analysis['score'] >= 3:
-        insights.append("📈 **Bullish signals dominating** - Upward momentum building")
+        insights.append("**Bullish signals dominating** - Upward momentum building")
     elif analysis['score'] <= -5:
-        insights.append("📉 **Very strong bearish convergence** - Multiple indicators suggest decline")
+        insights.append("**Very strong bearish convergence** - Multiple indicators suggest decline")
     elif analysis['score'] <= -3:
-        insights.append("🔻 **Bearish signals present** - Downward pressure building")
+        insights.append("**Bearish signals present** - Downward pressure building")
     
     # MACD insights
     if analysis.get('macd_signal') == 'Bullish' and not pd.isna(df['macd_histogram'].iloc[-1]):
         if df['macd_histogram'].iloc[-1] > 0:
-            insights.append("⚡ **MACD bullish momentum** - Trend acceleration likely")
+            insights.append("**MACD bullish momentum** - Trend acceleration likely")
     
     # Display insights
     if insights:
@@ -1082,10 +1088,10 @@ def main():
             if i < len(insights) - 1:
                 st.markdown("---")
     else:
-        st.info("📊 Market showing balanced conditions - Monitor for clearer directional signals")
+        st.info("Market showing balanced conditions - Monitor for clearer directional signals")
     
     # Enhanced Technical Indicators Table
-    st.header("📋 Current Technical Indicators")
+    st.header("Current Technical Indicators")
     
     latest = df.iloc[-1]
     
@@ -1093,7 +1099,7 @@ def main():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**📊 Momentum Indicators**")
+        st.markdown("**Momentum Indicators**")
         momentum_data = {
             'Indicator': ['RSI (14)', 'Stochastic %K', 'Stochastic %D', 'MACD'],
             'Value': [
@@ -1112,7 +1118,7 @@ def main():
         st.dataframe(pd.DataFrame(momentum_data), use_container_width=True)
     
     with col2:
-        st.markdown("**📈 Trend Indicators**")
+        st.markdown("**Trend Indicators**")
         trend_data = {
             'Indicator': ['SMA 7', 'SMA 20', 'SMA 50', 'BB Position'],
             'Value': [
@@ -1135,12 +1141,12 @@ def main():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### 📘 How to Read the Analysis")
+        st.markdown("### How to Read the Analysis")
         st.markdown("""
         **Signal Strength:**
-        - 🔥 **Very Strong/Strong:** High confidence signals
-        - 📊 **Medium:** Moderate confidence, confirm with other indicators  
-        - 📉 **Weak:** Low confidence, use as supporting evidence only
+        - **Very Strong/Strong:** High confidence signals
+        - **Medium:** Moderate confidence, confirm with other indicators  
+        - **Weak:** Low confidence, use as supporting evidence only
         
         **Key Indicators:**
         - **RSI:** < 30 = Oversold, > 70 = Overbought
@@ -1149,50 +1155,51 @@ def main():
         """)
     
     with col2:
-        st.markdown("### ⚡ Performance Info")
+        st.markdown("### Performance Info")
         st.markdown(f"""
         **Data Freshness:** {(datetime.now() - data['last_update']).seconds // 60} minutes ago  
         **Analysis Period:** {data['analysis_period']} days  
-        **API Calls:** Optimized batch requests  
+        **API Calls:** Optimized for rate limits  
         **Cache Status:** {len(df)} data points loaded  
+        **Coins Available:** {len(PREDEFINED_COINS)} predefined coins  
         """)
         
         if auto_refresh:
             next_refresh = 60 - (datetime.now() - data['last_update']).seconds
             if next_refresh > 0:
-                st.info(f"🔄 Auto-refresh in {next_refresh} seconds")
+                st.info(f"Auto-refresh in {next_refresh} seconds")
     
-    st.markdown("*⚠️ Disclaimer: This analysis is for educational purposes only. Always conduct your own research and consider multiple sources before making trading decisions.*")
+    st.markdown("*Disclaimer: This analysis is for educational purposes only. Always conduct your own research and consider multiple sources before making trading decisions.*")
 
 # Enhanced Sidebar Info
 with st.sidebar:
     st.markdown("---")
-    st.markdown("### 📖 About This Bot")
+    st.markdown("### About This Bot")
     st.markdown("""
-    **🔗 Data Source:** CoinGecko API (Free Tier)  
-    **⚡ Optimization:** Batch requests + caching  
-    **🔄 Update Frequency:** 5-10 minutes  
-    **📊 Analysis:** 8+ Technical Indicators  
-    **🎯 Patterns:** Support/Resistance + Trends  
+    **Data Source:** CoinGecko API (Free Tier)  
+    **Optimization:** Predefined coins + caching  
+    **Update Frequency:** 15 minutes  
+    **Analysis:** 8+ Technical Indicators  
+    **Patterns:** Support/Resistance + Trends  
     """)
     
-    st.markdown("### 🚀 Performance Features")
+    st.markdown("### Performance Features")
     st.markdown("""
-    - ✅ **Smart caching** (2hr coin list, 10min market data)
-    - ✅ **Batch API calls** (reduced requests by 60%)
-    - ✅ **Rate limit protection** (0.6s delays)
-    - ✅ **Retry logic** (exponential backoff)
-    - ✅ **Progressive loading** (real-time status)
-    - ✅ **Trending coins** (quick access)
+    - **Predefined coin list** (no API calls for search)
+    - **Smart caching** (15min data cache)
+    - **Rate limit protection** (2.5s delays)
+    - **Retry logic** (exponential backoff)
+    - **Progressive loading** (real-time status)
+    - **Local search** (instant filtering)
     """)
     
     # API Status indicator
-    st.markdown("### 🔌 API Status")
+    st.markdown("### API Status")
     if 'current_analysis' in st.session_state:
-        st.success("🟢 Connected")
+        st.success("Connected")
         st.caption("Real-time data flowing")
     else:
-        st.info("🟡 Ready")
+        st.info("Ready")
         st.caption("Select a coin to begin")
 
 if __name__ == "__main__":
