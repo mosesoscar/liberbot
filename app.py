@@ -21,8 +21,23 @@ class CoinGeckoTradingBot:
         """Initialize the trading analysis bot using CoinGecko API"""
         self.base_url = "https://api.coingecko.com/api/v3"
         
+    @st.cache_data(ttl=3600) # Cache for 1 hour
+    def get_all_coins_list(_self):
+        """Get a comprehensive list of all available coins with their IDs and symbols for search."""
+        try:
+            response = requests.get(f"{_self.base_url}/coins/list")
+            response.raise_for_status() # Raise an exception for HTTP errors
+            coins = response.json()
+            return {coin['name']: {'id': coin['id'], 'symbol': coin['symbol'].upper()} for coin in coins}
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error fetching full coin list: {e}")
+            return {}
+        except Exception as e:
+            st.error(f"An unexpected error occurred while fetching coin list: {e}")
+            return {}
+
     def get_coin_list(self):
-        """Get list of available coins"""
+        """Get list of available coins (used for popular coins dropdown initially)"""
         try:
             response = requests.get(f"{self.base_url}/coins/markets", 
                                   params={'vs_currency': 'usd', 'order': 'market_cap_desc', 'per_page': 100})
@@ -401,30 +416,52 @@ def main():
     # Sidebar controls
     st.sidebar.header("🔧 Analysis Controls")
     
-    # Get popular coins
-    with st.spinner("Loading available coins..."):
-        coin_options = {
-            'Bitcoin': 'bitcoin',
-            'Ethereum': 'ethereum', 
-            'Binance Coin': 'binancecoin',
-            'Cardano': 'cardano',
-            'XRP': 'ripple',
-            'Solana': 'solana',
-            'Polkadot': 'polkadot',
-            'Dogecoin': 'dogecoin',
-            'Avalanche': 'avalanche-2',
-            'Chainlink': 'chainlink'
-        }
+    # Get all coins for search
+    all_coins_data = bot.get_all_coins_list()
+    all_coin_names = sorted(list(all_coins_data.keys()))
+
+    # Search feature
+    search_query = st.sidebar.text_input("🔍 Search for a Cryptocurrency", "").strip()
     
-    # Coin selection
-    selected_coin_name = st.sidebar.selectbox(
-        "📊 Select Cryptocurrency",
-        list(coin_options.keys()),
-        index=0
-    )
-    
-    coin_id = coin_options[selected_coin_name]
-    
+    # Coin selection logic
+    selected_coin_name = None
+    coin_id = None
+
+    if search_query:
+        # Filter coins based on search query
+        filtered_coins = [
+            name for name in all_coin_names 
+            if search_query.lower() in name.lower() or 
+               search_query.lower() == all_coins_data[name]['symbol'].lower()
+        ]
+        
+        if filtered_coins:
+            selected_coin_name = st.sidebar.selectbox(
+                "Select from search results",
+                filtered_coins,
+                index=0
+            )
+            coin_id = all_coins_data[selected_coin_name]['id']
+        else:
+            st.sidebar.info("No coins found matching your search.")
+            st.session_state.current_analysis = None # Clear previous analysis if no coin is found
+    else:
+        # Get popular coins if no search query
+        with st.spinner("Loading popular coins..."):
+            popular_coin_options = bot.get_coin_list()
+        
+        if popular_coin_options:
+            selected_coin_name = st.sidebar.selectbox(
+                "📊 Select a Popular Cryptocurrency",
+                list(popular_coin_options.keys()),
+                index=0
+            )
+            coin_id = popular_coin_options[selected_coin_name]
+        else:
+            st.sidebar.error("Could not load popular coins. Please try searching.")
+            st.session_state.current_analysis = None
+
+
     # Analysis period
     analysis_days = st.sidebar.selectbox(
         "📅 Analysis Period",
@@ -433,7 +470,7 @@ def main():
     )
     
     # Analysis button
-    analyze_button = st.sidebar.button("🚀 Analyze Now", type="primary")
+    analyze_button = st.sidebar.button("🚀 Analyze Now", type="primary", disabled=(coin_id is None))
     
     # Auto-refresh
     auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (60s)")
@@ -443,21 +480,34 @@ def main():
         st.rerun()
     
     # Main analysis
-    if analyze_button or 'current_analysis' not in st.session_state:
+    # Trigger analysis if button is clicked OR if a coin is newly selected from search/dropdown
+    # and no analysis is currently displayed OR if a different coin is selected.
+    trigger_analysis = False
+    if analyze_button:
+        trigger_analysis = True
+    elif 'current_analysis' not in st.session_state and coin_id:
+        trigger_analysis = True
+    elif 'current_analysis' in st.session_state and coin_id and st.session_state.current_analysis.get('coin_id') != coin_id:
+        # If the coin ID has changed, re-analyze
+        trigger_analysis = True
+
+    if trigger_analysis and coin_id: # Ensure coin_id is not None
         with st.spinner(f'🔍 Analyzing {selected_coin_name}...'):
             try:
                 # Get current price info
                 price_info = bot.get_current_price_info(coin_id)
                 
                 if not price_info:
-                    st.error("❌ Failed to fetch coin data. Please try again.")
+                    st.error("❌ Failed to fetch coin data. Please try again or search for a different coin.")
+                    st.session_state.current_analysis = None
                     return
                 
                 # Get historical data
                 df = bot.get_price_data(coin_id, days=analysis_days)
                 
                 if df.empty:
-                    st.error("❌ No historical data available for this coin.")
+                    st.error("❌ No historical data available for this coin for the selected period.")
+                    st.session_state.current_analysis = None
                     return
                 
                 # Calculate indicators
@@ -472,16 +522,18 @@ def main():
                     'df': df,
                     'analysis': analysis,
                     'coin_name': selected_coin_name,
+                    'coin_id': coin_id, # Store coin_id to check for changes
                     'last_update': datetime.now()
                 }
                 
             except Exception as e:
                 st.error(f"❌ Analysis failed: {str(e)}")
+                st.session_state.current_analysis = None
                 return
     
     # Display results
-    if 'current_analysis' not in st.session_state:
-        st.info("👆 Select a coin and click 'Analyze Now' to begin analysis")
+    if 'current_analysis' not in st.session_state or st.session_state.current_analysis is None:
+        st.info("👆 Search for a coin or select from popular options, then click 'Analyze Now' to begin analysis.")
         return
     
     data = st.session_state.current_analysis
@@ -491,7 +543,7 @@ def main():
     coin_name = data['coin_name']
     
     # Success message
-    st.success(f"✅ Analysis complete for {coin_name}")
+    st.success(f"✅ Analysis complete for {coin_name} ({price_info['symbol']})")
     st.caption(f"Last updated: {data['last_update'].strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Quick metrics row
@@ -610,12 +662,12 @@ def main():
             f"{latest['stoch_k']:.1f}" if not pd.isna(latest['stoch_k']) else 'N/A'
         ],
         'Signal': [
-            'Oversold' if latest['rsi'] < 30 else 'Overbought' if latest['rsi'] > 70 else 'Neutral',
-            'Bullish' if latest['macd'] > latest['macd_signal'] else 'Bearish',
-            'Above' if latest['close'] > latest['sma_7'] else 'Below',
-            'Above' if latest['close'] > latest['sma_20'] else 'Below', 
-            'Upper' if latest['close'] > latest['bb_upper'] else 'Lower' if latest['close'] < latest['bb_lower'] else 'Middle',
-            'Oversold' if latest['stoch_k'] < 20 else 'Overbought' if latest['stoch_k'] > 80 else 'Neutral'
+            'Oversold' if not pd.isna(latest['rsi']) and latest['rsi'] < 30 else ('Overbought' if not pd.isna(latest['rsi']) and latest['rsi'] > 70 else 'Neutral'),
+            'Bullish' if not pd.isna(latest['macd']) and not pd.isna(latest['macd_signal']) and latest['macd'] > latest['macd_signal'] else 'Bearish',
+            'Above' if not pd.isna(latest['close']) and not pd.isna(latest['sma_7']) and latest['close'] > latest['sma_7'] else 'Below',
+            'Above' if not pd.isna(latest['close']) and not pd.isna(latest['sma_20']) and latest['close'] > latest['sma_20'] else 'Below', 
+            'Upper' if not pd.isna(latest['close']) and not pd.isna(latest['bb_upper']) and latest['close'] > latest['bb_upper'] else ('Lower' if not pd.isna(latest['close']) and not pd.isna(latest['bb_lower']) and latest['close'] < latest['bb_lower'] else 'Middle'),
+            'Oversold' if not pd.isna(latest['stoch_k']) and latest['stoch_k'] < 20 else ('Overbought' if not pd.isna(latest['stoch_k']) and latest['stoch_k'] > 80 else 'Neutral')
         ]
     }
     
